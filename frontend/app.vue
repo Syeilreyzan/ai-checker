@@ -687,7 +687,7 @@ const copied = ref<boolean>(false)
 
 const showSettingsModal = ref<boolean>(false)
 const llmSettings = ref({
-  provider: 'openai',
+  provider: 'gemini',
   apiKey: ''
 })
 
