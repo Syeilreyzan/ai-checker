@@ -1,0 +1,21 @@
+# Environment secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Nuxt / Node
+node_modules/
+.nuxt/
+.output/
+dist/
+.nitro/
+.cache/
+
+# OS
+.DS_Store
