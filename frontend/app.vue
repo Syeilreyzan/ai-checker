@@ -15,7 +15,7 @@
               </span>
             </div>
             <p class="text-xs text-slate-400">
-              Module 1: Forensic AI Origin Detector &bull; Module 2: Interactive Sentence Humanizer
+              Module 1: Forensic AI Origin Detector &bull; Module 2: Anti-Detector Sentence Humanizer
             </p>
           </div>
         </div>
@@ -106,7 +106,7 @@
       >
         <div>
           <strong class="font-semibold">Note:</strong> External Gemini API returned an authentication/model notice ({{ analysisResult.llm_error }}).
-          Results below are powered by the built-in <strong>Multi-Signal Forensic NLP Engine</strong>.
+          Results below are powered by the built-in <strong>Anti-Detector Forensic NLP Engine</strong>.
           For Google AI Studio Gemini Pro, use a key starting with <code class="text-amber-100 font-mono">AIzaSy...</code> from <a href="https://aistudio.google.com/apikey" target="_blank" class="underline text-white">aistudio.google.com/apikey</a>.
         </div>
         <button
@@ -146,16 +146,17 @@
                       : 'text-slate-400 hover:text-slate-200'
                   "
                 >
-                  ✏️ Edit / Paste Text
+                  ✏️ Edit / Paste Raw Text
                 </button>
               </div>
 
               <div class="flex items-center gap-2">
                 <button
-                  @click="copyCurrentText"
-                  class="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                  v-if="analysisResult"
+                  @click="copyHumanizedText"
+                  class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 transition"
                 >
-                  {{ copied ? '✓ Copied!' : '📋 Copy Text' }}
+                  {{ copied ? '✓ Copied Humanized Text!' : '📋 Copy Humanized Text' }}
                 </button>
                 <button
                   @click="runAnalysis"
@@ -173,18 +174,27 @@
               <textarea
                 v-model="inputText"
                 rows="12"
-                placeholder="Paste or type any article, email, or ChatGPT/Gemini paragraph here, then click '⚡ Scan for AI Origin'..."
+                placeholder="Paste or type any article, email, or ChatGPT/Gemini paragraph here, then click '⚡ Run AI Check & Generate Corrections'..."
                 class="w-full bg-slate-950/90 border border-slate-700 rounded-xl p-4 text-sm leading-relaxed text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition resize-y"
               ></textarea>
-              <div class="flex items-center justify-between text-xs text-slate-400">
+              <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
                 <span>{{ wordCount }} words &bull; {{ characterCount }} characters</span>
-                <button
-                  @click="runAnalysis"
-                  :disabled="isAnalyzing || !inputText.trim()"
-                  class="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow disabled:opacity-40 transition"
-                >
-                  {{ isAnalyzing ? '⏳ Analyzing with AI Checker...' : '⚡ Run AI Check & Generate Corrections →' }}
-                </button>
+                <div class="flex items-center gap-2">
+                  <button
+                    @click="runAnalysisAndAutoApply"
+                    :disabled="isAnalyzing || !inputText.trim()"
+                    class="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow disabled:opacity-40 transition"
+                  >
+                    {{ isAnalyzing ? '⏳ Humanizing...' : '🔥 Scan & Auto-Humanize All Sentences' }}
+                  </button>
+                  <button
+                    @click="runAnalysis"
+                    :disabled="isAnalyzing || !inputText.trim()"
+                    class="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow disabled:opacity-40 transition"
+                  >
+                    {{ isAnalyzing ? '⏳ Analyzing...' : '🔍 Scan & Review Sentence-by-Sentence' }}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -382,6 +392,38 @@
                       </button>
                     </div>
                   </div>
+                </div>
+              </div>
+
+              <!-- Dedicated Ready-to-Copy Humanized Output Card -->
+              <div class="rounded-2xl bg-emerald-950/20 border border-emerald-700/50 p-4 space-y-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div class="text-xs font-bold uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
+                      <span>✅ Final Humanized Output (Ready for External AI Detectors)</span>
+                    </div>
+                    <p class="text-[11px] text-slate-400">
+                      This box automatically combines your accepted edits and top anti-detector human rewrites:
+                    </p>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <button
+                      v-if="unfixedFlaggedCount > 0"
+                      @click="acceptAllTopSuggestions"
+                      class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-600/40 transition"
+                    >
+                      ✓ Lock In All {{ unfixedFlaggedCount }} Fixes
+                    </button>
+                    <button
+                      @click="copyHumanizedText"
+                      class="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow transition"
+                    >
+                      {{ copied ? '✓ Copied to Clipboard!' : '📋 Copy Humanized Text' }}
+                    </button>
+                  </div>
+                </div>
+                <div class="p-3.5 rounded-xl bg-slate-950/90 border border-emerald-800/40 text-sm text-emerald-100 leading-relaxed select-all">
+                  {{ compiledHumanizedText }}
                 </div>
               </div>
             </div>
@@ -770,6 +812,20 @@ const unfixedFlaggedCount = computed(
   () => flaggedSentences.value.filter((s) => !s.accepted).length
 )
 
+// Compiled humanized output: uses accepted text or automatically falls back to the top anti-detector suggestion
+const compiledHumanizedText = computed(() => {
+  if (!sentences.value.length) return inputText.value
+  return sentences.value
+    .map((s) => {
+      if (s.accepted) return s.text
+      if ((s.status === 'ai' || s.status === 'mixed') && s.suggestions?.length > 0) {
+        return s.suggestions[0].text
+      }
+      return s.text
+    })
+    .join(' ')
+})
+
 const liveAiScore = computed(() => {
   if (!sentences.value.length) return 0
   const sum = sentences.value.reduce((acc, s) => acc + s.ai_probability, 0)
@@ -924,6 +980,11 @@ async function runAnalysis() {
   }
 }
 
+async function runAnalysisAndAutoApply() {
+  await runAnalysis()
+  acceptAllTopSuggestions()
+}
+
 async function loadSample(sample: SamplePreset) {
   activeSampleId.value = sample.id
   inputText.value = sample.text
@@ -935,9 +996,9 @@ function saveSettingsAndRescan() {
   runAnalysis()
 }
 
-async function copyCurrentText() {
+async function copyHumanizedText() {
   try {
-    await navigator.clipboard.writeText(inputText.value)
+    await navigator.clipboard.writeText(compiledHumanizedText.value)
     copied.value = true
     setTimeout(() => {
       copied.value = false
