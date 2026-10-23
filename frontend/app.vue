@@ -673,7 +673,7 @@
         </div>
 
         <p class="text-xs text-slate-400 leading-relaxed">
-          Configured to use <strong>Google Gemini Pro (`gemini-2.5-pro`)</strong> by default. You can set your key in <code class="text-indigo-300">.env</code> or paste an <code class="text-indigo-300">AIzaSy...</code> key from <a href="https://aistudio.google.com/apikey" target="_blank" class="underline text-indigo-300">Google AI Studio</a> below.
+          Reads your active provider &amp; key from <code class="text-indigo-300">.env</code> automatically (currently <strong>OpenAI</strong> / <strong>Gemini</strong>), or you can override the provider/model below for this session.
         </p>
 
         <div class="space-y-3">
@@ -681,11 +681,23 @@
             <label class="block text-xs font-medium text-slate-300 mb-1">Provider</label>
             <select
               v-model="llmSettings.provider"
+              @change="onProviderChange"
               class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
             >
+              <option value="openai">OpenAI (ChatGPT)</option>
               <option value="gemini">Google Gemini</option>
-              <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic Claude</option>
+            </select>
+          </div>
+
+          <div v-if="llmSettings.provider === 'openai'">
+            <label class="block text-xs font-medium text-slate-300 mb-1">OpenAI Model</label>
+            <select
+              v-model="llmSettings.model"
+              class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+            >
+              <option value="gpt-4o-mini">gpt-4o-mini (Fast &amp; Smart)</option>
+              <option value="gpt-4o">gpt-4o (Flagship)</option>
             </select>
           </div>
 
@@ -695,7 +707,7 @@
               v-model="llmSettings.model"
               class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
             >
-              <option value="gemini-2.5-pro">Gemini 2.5 Pro (Recommended — Deep Forensic)</option>
+              <option value="gemini-2.5-pro">Gemini 2.5 Pro (Deep Forensic)</option>
               <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
               <option value="gemini-2.0-flash">Gemini 2.0 Flash (Fast)</option>
             </select>
@@ -708,7 +720,7 @@
             <input
               v-model="llmSettings.apiKey"
               type="password"
-              placeholder="AIzaSy... or sk-..."
+              placeholder="sk-... or AIzaSy..."
               class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
             />
           </div>
@@ -781,11 +793,22 @@ const regeneratingId = ref<number | null>(null)
 const copied = ref<boolean>(false)
 
 const showSettingsModal = ref<boolean>(false)
+const useCustomOverride = ref<boolean>(false)
 const llmSettings = ref({
-  provider: 'gemini',
-  model: 'gemini-2.5-pro',
+  provider: 'openai',
+  model: 'gpt-4o-mini',
   apiKey: ''
 })
+
+function onProviderChange() {
+  if (llmSettings.value.provider === 'openai') {
+    llmSettings.value.model = 'gpt-4o-mini'
+  } else if (llmSettings.value.provider === 'gemini') {
+    llmSettings.value.model = 'gemini-2.5-pro'
+  } else {
+    llmSettings.value.model = 'claude-3-5-haiku-latest'
+  }
+}
 
 const wordCount = computed(() => {
   const trimmed = inputText.value.trim()
@@ -931,8 +954,8 @@ async function regenerateSentenceSuggestions(sent: SentenceItem) {
         sentence: sent.original_text,
         context_text: inputText.value,
         tone: 'natural',
-        provider: llmSettings.value.provider,
-        model: llmSettings.value.model,
+        provider: useCustomOverride.value ? llmSettings.value.provider : undefined,
+        model: useCustomOverride.value ? llmSettings.value.model : undefined,
         api_key: llmSettings.value.apiKey || undefined
       }
     })
@@ -954,8 +977,8 @@ async function runAnalysis() {
       method: 'POST',
       body: {
         text: inputText.value,
-        provider: llmSettings.value.provider,
-        model: llmSettings.value.model,
+        provider: useCustomOverride.value ? llmSettings.value.provider : undefined,
+        model: useCustomOverride.value ? llmSettings.value.model : undefined,
         api_key: llmSettings.value.apiKey || undefined
       }
     })
@@ -992,6 +1015,7 @@ async function loadSample(sample: SamplePreset) {
 }
 
 function saveSettingsAndRescan() {
+  useCustomOverride.value = true
   showSettingsModal.value = false
   runAnalysis()
 }
@@ -1009,6 +1033,15 @@ async function copyHumanizedText() {
 }
 
 onMounted(async () => {
+  try {
+    const health: any = await $fetch(`${apiBase}/api/health`)
+    if (health?.configured_provider && health.configured_provider !== 'forensic_nlp') {
+      llmSettings.value.provider = health.configured_provider
+      llmSettings.value.model = health.configured_model
+    }
+  } catch (e) {
+    // ignore
+  }
   try {
     const res: any = await $fetch(`${apiBase}/api/samples`)
     samples.value = res.samples || []

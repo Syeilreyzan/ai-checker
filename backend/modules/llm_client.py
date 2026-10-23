@@ -25,7 +25,7 @@ def _reload_env():
 
 
 class LLMClient:
-    """Unified async LLM client using google-generativeai SDK for Gemini Pro (+ OpenAI/Anthropic support)."""
+    """Unified async LLM client supporting OpenAI, Gemini Pro, and Anthropic."""
 
     def __init__(
         self,
@@ -39,64 +39,79 @@ class LLMClient:
         )
 
     @staticmethod
+    def _clean_model_for_provider(prov: str, model: Optional[str], default: str) -> str:
+        if not model or not model.strip():
+            return default
+        m = model.strip()
+        if prov == "openai" and m.startswith(("gemini", "claude")):
+            return default
+        if prov == "gemini" and m.startswith(("gpt-", "o1", "o3", "claude")):
+            return default
+        if prov == "anthropic" and m.startswith(("gpt-", "gemini")):
+            return default
+        return m
+
+    @classmethod
     def _resolve_credentials(
-        provider: Optional[str], api_key: Optional[str], model: Optional[str]
+        cls, provider: Optional[str], api_key: Optional[str], model: Optional[str]
     ):
         default_models = {
-            "gemini": "gemini-2.5-pro",
-            "openai": "gpt-4o-mini",
-            "anthropic": "claude-3-5-haiku-latest",
+            "openai": os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
+            "gemini": os.getenv("GEMINI_MODEL", "gemini-2.5-pro").strip() or "gemini-2.5-pro",
+            "anthropic": os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest").strip() or "claude-3-5-haiku-latest",
         }
 
         # 1. Explicit runtime API key override from UI
         if api_key and api_key.strip():
-            prov = (provider or "gemini").lower().strip()
-            return (
-                prov,
-                api_key.strip(),
-                (model or default_models.get(prov, "gemini-2.5-pro")).strip(),
+            prov = (provider or "openai").lower().strip()
+            resolved_model = cls._clean_model_for_provider(
+                prov, model, default_models.get(prov, "gpt-4o-mini")
             )
+            return prov, api_key.strip(), resolved_model
 
-        # 2. Check environment variables (and respect runtime provider/model selection if provided)
+        # 2. Check environment variables
         env_provider = (provider or os.getenv("LLM_PROVIDER", "")).lower().strip()
         openai_key = os.getenv("OPENAI_API_KEY", "").strip()
         gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
         anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
 
-        if env_provider == "gemini" and gemini_key:
-            resolved_model = (
-                model or os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
-            ).strip()
-            return "gemini", gemini_key, resolved_model
-        if env_provider == "anthropic" and anthropic_key:
-            resolved_model = (
-                model or os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest")
-            ).strip()
-            return "anthropic", anthropic_key, resolved_model
         if env_provider == "openai" and openai_key:
-            resolved_model = (
-                model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-            ).strip()
-            return "openai", openai_key, resolved_model
-
-        # Auto-detect whichever key is configured in .env
-        if gemini_key:
+            return (
+                "openai",
+                openai_key,
+                cls._clean_model_for_provider("openai", model, default_models["openai"]),
+            )
+        if env_provider == "gemini" and gemini_key:
             return (
                 "gemini",
                 gemini_key,
-                (model or os.getenv("GEMINI_MODEL", "gemini-2.5-pro")).strip(),
+                cls._clean_model_for_provider("gemini", model, default_models["gemini"]),
             )
+        if env_provider == "anthropic" and anthropic_key:
+            return (
+                "anthropic",
+                anthropic_key,
+                cls._clean_model_for_provider("anthropic", model, default_models["anthropic"]),
+            )
+
+        # Auto-detect whichever key is configured in .env (prefer OpenAI if sk- is present)
         if openai_key:
             return (
                 "openai",
                 openai_key,
-                (model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")).strip(),
+                cls._clean_model_for_provider("openai", model, default_models["openai"]),
+            )
+        if gemini_key:
+            return (
+                "gemini",
+                gemini_key,
+                cls._clean_model_for_provider("gemini", model, default_models["gemini"]),
             )
         if anthropic_key:
             return (
                 "anthropic",
                 anthropic_key,
-                (model or os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest")).strip(),
+                cls._clean_model_for_provider("anthropic", model, default_models["anthropic"]),
             )
 
         return "forensic_nlp", "", "forensic-linguistic-v2"
@@ -105,38 +120,59 @@ class LLMClient:
     def is_configured(self) -> bool:
         return bool(self.api_key and self.provider in ("openai", "gemini", "anthropic"))
 
+    async def _call_openai(
+        self, api_key: str, model_name: str, system_prompt: str, user_prompt: str
+    ) -> Dict[str, Any]:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model_name,
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.5,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            raw_text = data["choices"][0]["message"]["content"]
+            return self._parse_json(raw_text)
+
     async def complete_json(self, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
-        """Request a structured JSON response from the active LLM provider."""
+        """Request a structured JSON response from the active LLM provider, with cross-provider failover."""
         if not self.is_configured:
             raise RuntimeError("No external LLM API key configured.")
 
+        if self.provider == "openai":
+            return await self._call_openai(
+                self.api_key, self.model, system_prompt, user_prompt
+            )
+
         if self.provider == "gemini":
-            return await self._call_gemini(system_prompt, user_prompt)
+            try:
+                return await self._call_gemini(system_prompt, user_prompt)
+            except Exception as gemini_err:
+                # If OPENAI_API_KEY is also configured in .env, automatically fail over to OpenAI!
+                openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+                if openai_key:
+                    openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+                    res = await self._call_openai(
+                        openai_key, openai_model, system_prompt, user_prompt
+                    )
+                    self.provider = "openai"
+                    self.model = openai_model
+                    return res
+                raise gemini_err
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            if self.provider == "openai":
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": self.model,
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0.4,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                raw_text = data["choices"][0]["message"]["content"]
-                return self._parse_json(raw_text)
-
-            elif self.provider == "anthropic":
+        if self.provider == "anthropic":
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={
@@ -178,10 +214,7 @@ class LLMClient:
     async def _call_gemini(
         self, system_prompt: str, user_prompt: str
     ) -> Dict[str, Any]:
-        """
-        Calls Google Gemini using official `google-generativeai` SDK first,
-        with fallback across Gemini Pro models and Vertex Express REST endpoint.
-        """
+        """Calls Google Gemini using official google-generativeai SDK with REST fallback."""
         candidate_models: List[str] = []
         for m in [
             self.model,
@@ -197,7 +230,6 @@ class LLMClient:
 
         last_error = None
 
-        # 1. Use official google-generativeai SDK if installed and key is standard AI Studio key
         if genai is not None and not self.api_key.startswith("AQ."):
             for model_name in candidate_models:
                 try:
@@ -213,7 +245,6 @@ class LLMClient:
                 except Exception as exc:
                     last_error = f"{model_name}: {str(exc)[:180]}"
 
-        # 2. Fallback REST client (supports both Vertex Express `AQ.` keys and `AIza` keys)
         payload_with_sys = {
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "contents": [
