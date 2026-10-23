@@ -568,6 +568,38 @@
                   </div>
                 </div>
               </div>
+
+              <!-- Two-Stage Architecture & Targeted Quota Saver Card (CEO Pitch Proof) -->
+              <div
+                v-if="analysisResult.quota_metrics"
+                class="p-3.5 rounded-xl bg-indigo-950/30 border border-indigo-500/30 space-y-2 text-xs"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <span class="font-bold uppercase tracking-wider text-indigo-300 text-[11px]">
+                    🎯 2-Stage Pipeline Quota Efficiency
+                  </span>
+                  <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold text-[11px]">
+                    {{ analysisResult.quota_metrics.quota_saved_percent }}% Rewrite Quota Saved
+                  </span>
+                </div>
+                <div class="grid grid-cols-2 gap-2 text-[11px] text-slate-300">
+                  <div class="p-2 rounded-lg bg-slate-950/70 border border-slate-800">
+                    <div class="text-slate-400">Stage 1: Detection Screening</div>
+                    <div class="font-semibold text-white mt-0.5">
+                      {{ analysisResult.detection_stage_engine || 'Free Screening Baseline' }}
+                    </div>
+                  </div>
+                  <div class="p-2 rounded-lg bg-slate-950/70 border border-slate-800">
+                    <div class="text-slate-400">Stage 2: Targeted Rewrite</div>
+                    <div class="font-semibold text-indigo-300 mt-0.5">
+                      {{ analysisResult.quota_metrics.targeted_flagged_words }} / {{ analysisResult.quota_metrics.total_words }} words targeted
+                    </div>
+                  </div>
+                </div>
+                <p class="text-[11px] text-slate-400 leading-relaxed">
+                  By screening with Stage 1 detection first, only <strong>{{ analysisResult.quota_metrics.targeted_flagged_words }} AI-flagged words</strong> are sent to the humanizer (skipping {{ analysisResult.quota_metrics.skipped_human_words }} human words) to conserve your 2,500 free monthly words.
+                </p>
+              </div>
             </div>
           </div>
 

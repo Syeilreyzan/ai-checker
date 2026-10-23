@@ -1,5 +1,7 @@
+import os
 import re
 from typing import Any, Dict, List, Optional
+import httpx
 from .llm_client import LLMClient
 
 # Comprehensive AI-to-Human vocabulary & phrase de-AI dictionary
@@ -193,6 +195,41 @@ def _apply_contractions(text: str) -> str:
     return out
 
 
+async def call_tohuman_api(sentence: str, api_key: Optional[str] = None) -> Optional[str]:
+    """
+    Calls ToHuman's targeted humanization API (2,500 free words/month, 60 req/min).
+    Only invoked on sentences flagged as AI to preserve free monthly word quota.
+    """
+    key = (api_key or os.getenv("TOHUMAN_API_KEY", "")).strip()
+    if not key:
+        return None
+    url = os.getenv("TOHUMAN_API_URL", "https://api.tohuman.ai/v1/humanize").strip()
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "X-API-Key": key,
+                    "Content-Type": "application/json",
+                },
+                json={"text": sentence, "mode": "standard"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                rewritten = (
+                    data.get("humanized_text")
+                    or data.get("output")
+                    or data.get("text")
+                    or data.get("result")
+                )
+                if isinstance(rewritten, str) and rewritten.strip():
+                    return rewritten.strip()
+    except Exception as exc:
+        print(f"[TOHUMAN API NOTICE] {exc}", flush=True)
+    return None
+
+
 def _restructure_ai_skeleton(sentence: str, idx_seed: int = 0) -> Dict[str, str]:
     """
     Deep syntactic restructuring to break AI sentence skeletons and inject high burstiness
@@ -245,7 +282,6 @@ def _restructure_ai_skeleton(sentence: str, idx_seed: int = 0) -> Dict[str, str]
             p1 = _cap(parts[0].rstrip("."))
             p2 = _cap(parts[1].rstrip("."))
             if len(parts[0].split()) <= 5:
-                # Short transition phrase at start: turn it into a short punchy sentence or strip it
                 natural = f"{p2}."
                 exec_ver = f"{p2}—and that's what counts."
                 casual = f"Look: {p2[0].lower() + p2[1:]}."
@@ -322,11 +358,35 @@ async def rewrite_flagged_sentence(
     tone: str,
     custom_instruction: Optional[str],
     llm_client: LLMClient,
+    tohuman_api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Interactive Sentence Corrector Module.
-    Uses Gemini Pro (or configured External LLM API) with explicit anti-detector burstiness/perplexity rules.
+    Stage 2: Targeted Sentence Humanizer Module.
+    1. If ToHuman API key is configured, uses ToHuman's 2,500 free word quota on the targeted sentence.
+    2. Otherwise uses OpenAI / Gemini Pro with anti-detector burstiness & perplexity rules.
+    3. Includes local syntactic humanizer fallback.
     """
+    # 1. Check ToHuman API first if configured
+    tohuman_result = await call_tohuman_api(sentence, tohuman_api_key)
+    if tohuman_result:
+        fallback = generate_fallback_suggestions(sentence)
+        return {
+            "original_sentence": sentence,
+            "suggestions": [
+                {
+                    "label": "ToHuman API Rewrite (Targeted Quota)",
+                    "tone": "tohuman",
+                    "text": tohuman_result,
+                },
+                fallback[1],
+                fallback[2],
+            ],
+            "what_changed": "Rewritten via ToHuman API (Targeted sentence rewrite to conserve 2,500 words/mo free quota).",
+            "provider_used": "tohuman",
+            "is_live_llm": True,
+        }
+
+    # 2. Check OpenAI / Gemini / Anthropic
     if llm_client.is_configured:
         try:
             system_prompt = (
