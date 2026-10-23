@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import re
@@ -5,6 +6,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 import httpx
+
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 
 
 def _reload_env():
@@ -19,7 +25,7 @@ def _reload_env():
 
 
 class LLMClient:
-    """Unified async LLM client supporting Gemini Pro (AI Studio & Vertex Express), OpenAI, and Anthropic."""
+    """Unified async LLM client using google-generativeai SDK for Gemini Pro (+ OpenAI/Anthropic support)."""
 
     def __init__(
         self,
@@ -104,6 +110,9 @@ class LLMClient:
         if not self.is_configured:
             raise RuntimeError("No external LLM API key configured.")
 
+        if self.provider == "gemini":
+            return await self._call_gemini(system_prompt, user_prompt)
+
         async with httpx.AsyncClient(timeout=60.0) as client:
             if self.provider == "openai":
                 resp = await client.post(
@@ -115,7 +124,7 @@ class LLMClient:
                     json={
                         "model": self.model,
                         "response_format": {"type": "json_object"},
-                        "temperature": 0.2,
+                        "temperature": 0.4,
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
@@ -126,9 +135,6 @@ class LLMClient:
                 data = resp.json()
                 raw_text = data["choices"][0]["message"]["content"]
                 return self._parse_json(raw_text)
-
-            elif self.provider == "gemini":
-                return await self._call_gemini(client, system_prompt, user_prompt)
 
             elif self.provider == "anthropic":
                 resp = await client.post(
@@ -141,7 +147,7 @@ class LLMClient:
                     json={
                         "model": self.model,
                         "max_tokens": 4096,
-                        "temperature": 0.2,
+                        "temperature": 0.4,
                         "system": system_prompt + "\nRespond ONLY with valid JSON.",
                         "messages": [{"role": "user", "content": user_prompt}],
                     },
@@ -153,13 +159,28 @@ class LLMClient:
 
         raise ValueError(f"Unsupported provider: {self.provider}")
 
+    def _call_genai_sdk_sync(
+        self, model_name: str, system_prompt: str, user_prompt: str
+    ) -> str:
+        """Synchronous helper using official google-generativeai SDK."""
+        genai.configure(api_key=self.api_key)
+        gen_model = genai.GenerativeModel(
+            model_name=model_name,
+            system_instruction=system_prompt,
+            generation_config={
+                "temperature": 0.4,
+                "response_mime_type": "application/json",
+            },
+        )
+        response = gen_model.generate_content(user_prompt)
+        return response.text
+
     async def _call_gemini(
-        self, client: httpx.AsyncClient, system_prompt: str, user_prompt: str
+        self, system_prompt: str, user_prompt: str
     ) -> Dict[str, Any]:
         """
-        Calls Google Gemini Pro supporting both:
-        1. Google AI Studio keys (AIza...) -> generativelanguage.googleapis.com
-        2. Vertex AI Express Mode keys (AQ....) -> aiplatform.googleapis.com & generativelanguage.googleapis.com
+        Calls Google Gemini using official `google-generativeai` SDK first,
+        with fallback across Gemini Pro models and Vertex Express REST endpoint.
         """
         candidate_models: List[str] = []
         for m in [
@@ -167,12 +188,32 @@ class LLMClient:
             "gemini-2.5-pro",
             "gemini-1.5-pro",
             "gemini-pro-latest",
+            "gemini-pro",
             "gemini-2.5-flash",
             "gemini-2.0-flash",
         ]:
             if m and m not in candidate_models:
                 candidate_models.append(m)
 
+        last_error = None
+
+        # 1. Use official google-generativeai SDK if installed and key is standard AI Studio key
+        if genai is not None and not self.api_key.startswith("AQ."):
+            for model_name in candidate_models:
+                try:
+                    raw_text = await asyncio.to_thread(
+                        self._call_genai_sdk_sync,
+                        model_name,
+                        system_prompt,
+                        user_prompt,
+                    )
+                    if raw_text:
+                        self.model = model_name
+                        return self._parse_json(raw_text)
+                except Exception as exc:
+                    last_error = f"{model_name}: {str(exc)[:180]}"
+
+        # 2. Fallback REST client (supports both Vertex Express `AQ.` keys and `AIza` keys)
         payload_with_sys = {
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "contents": [
@@ -182,44 +223,43 @@ class LLMClient:
                 }
             ],
             "generationConfig": {
-                "temperature": 0.2,
+                "temperature": 0.4,
                 "responseMimeType": "application/json",
             },
         }
 
         is_vertex_key = self.api_key.startswith("AQ.")
-        last_error = None
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            for model_name in candidate_models:
+                endpoints = (
+                    [
+                        f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model_name}:generateContent",
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
+                    ]
+                    if is_vertex_key
+                    else [
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
+                        f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model_name}:generateContent",
+                    ]
+                )
 
-        for model_name in candidate_models:
-            endpoints = (
-                [
-                    f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model_name}:generateContent",
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
-                ]
-                if is_vertex_key
-                else [
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
-                    f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model_name}:generateContent",
-                ]
-            )
-
-            for url in endpoints:
-                try:
-                    resp = await client.post(
-                        url,
-                        params={"key": self.api_key},
-                        headers={"Content-Type": "application/json"},
-                        json=payload_with_sys,
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
-                        self.model = model_name
-                        return self._parse_json(raw_text)
-                    else:
-                        last_error = f"HTTP {resp.status_code} ({model_name}): {resp.text[:160]}"
-                except Exception as exc:
-                    last_error = str(exc)
+                for url in endpoints:
+                    try:
+                        resp = await client.post(
+                            url,
+                            params={"key": self.api_key},
+                            headers={"Content-Type": "application/json"},
+                            json=payload_with_sys,
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+                            self.model = model_name
+                            return self._parse_json(raw_text)
+                        else:
+                            last_error = f"HTTP {resp.status_code} ({model_name}): {resp.text[:160]}"
+                    except Exception as exc:
+                        last_error = str(exc)
 
         raise RuntimeError(f"Gemini Pro API error ({last_error})")
 
