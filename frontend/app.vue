@@ -22,25 +22,38 @@
 
         <!-- Engine Status & API Settings Button -->
         <div class="flex items-center gap-3">
-          <div
-            class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs"
-            :class="isLiveLlm ? 'bg-emerald-950/40 border-emerald-700/50 text-emerald-300' : 'bg-indigo-950/40 border-indigo-700/50 text-indigo-300'"
+          <button
+            @click="showSettingsModal = true"
+            class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs transition"
+            :class="
+              analysisResult?.llm_error
+                ? 'bg-rose-950/60 border-rose-500/70 text-rose-200 hover:bg-rose-900/60'
+                : isLiveLlm
+                ? 'bg-emerald-950/40 border-emerald-700/50 text-emerald-300 hover:bg-emerald-900/40'
+                : 'bg-indigo-950/40 border-indigo-700/50 text-indigo-300'
+            "
           >
             <span
               class="w-2 h-2 rounded-full animate-pulse"
-              :class="isLiveLlm ? 'bg-emerald-400' : 'bg-indigo-400'"
+              :class="
+                analysisResult?.llm_error
+                  ? 'bg-rose-400'
+                  : isLiveLlm
+                  ? 'bg-emerald-400'
+                  : 'bg-indigo-400'
+              "
             ></span>
             <span>
               Engine:
               <strong class="font-semibold">{{ activeProviderLabel }}</strong>
             </span>
-          </div>
+          </button>
 
           <button
             @click="showSettingsModal = true"
             class="px-3.5 py-2 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition flex items-center gap-1.5"
           >
-            <span>⚙️ Gemini Pro / API Config</span>
+            <span>⚙️ LLM API Config</span>
           </button>
         </div>
       </div>
@@ -99,21 +112,27 @@
         </div>
       </section>
 
-      <!-- Optional API Warning Banner if API key returned an error -->
+      <!-- Prominent API Key Error Banner if API key is wrong or fails -->
       <div
         v-if="analysisResult?.llm_error"
-        class="bg-amber-950/40 border border-amber-700/60 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-amber-200"
+        class="bg-rose-950/60 border border-rose-500/70 rounded-xl px-4 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-100 shadow-lg"
       >
-        <div>
-          <strong class="font-semibold">Note:</strong> External Gemini API returned an authentication/model notice ({{ analysisResult.llm_error }}).
-          Results below are powered by the built-in <strong>Anti-Detector Forensic NLP Engine</strong>.
-          For Google AI Studio Gemini Pro, use a key starting with <code class="text-amber-100 font-mono">AIzaSy...</code> from <a href="https://aistudio.google.com/apikey" target="_blank" class="underline text-white">aistudio.google.com/apikey</a>.
+        <div class="space-y-1">
+          <div class="font-bold text-rose-300 flex items-center gap-1.5 text-sm">
+            <span>❌ LLM API Key Error ({{ (analysisResult.provider_used || 'LLM').toUpperCase() }})</span>
+          </div>
+          <p class="font-mono text-[11px] bg-slate-950/80 border border-rose-500/40 rounded px-2.5 py-1.5 text-rose-200">
+            {{ analysisResult.llm_error }}
+          </p>
+          <p class="text-slate-300">
+            Automatic fallback active: Results below are currently using the built-in <strong>Forensic NLP Engine</strong> until a valid API key is provided.
+          </p>
         </div>
         <button
           @click="showSettingsModal = true"
-          class="shrink-0 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-100 font-semibold"
+          class="shrink-0 px-3.5 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold shadow transition"
         >
-          Update Key
+          🔧 Fix / Test API Key
         </button>
       </div>
 
@@ -724,21 +743,47 @@
               class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
             />
           </div>
+
+          <!-- Live Key Test Result Box -->
+          <div
+            v-if="keyTestResult"
+            class="p-3 rounded-xl border text-xs leading-relaxed"
+            :class="
+              keyTestResult.valid
+                ? 'bg-emerald-950/50 border-emerald-500/60 text-emerald-200'
+                : 'bg-rose-950/60 border-rose-500/60 text-rose-200'
+            "
+          >
+            <div class="font-bold mb-0.5">
+              {{ keyTestResult.valid ? '✅ API Key Valid' : '❌ API Key Error' }}
+            </div>
+            <div class="font-mono text-[11px] break-words">{{ keyTestResult.message }}</div>
+          </div>
         </div>
 
-        <div class="flex justify-end gap-2 pt-2">
+        <div class="flex items-center justify-between gap-2 pt-2">
           <button
-            @click="showSettingsModal = false"
-            class="px-4 py-2 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300"
+            @click="testApiKeyNow"
+            :disabled="isTestingKey"
+            class="px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-indigo-500/40 transition"
           >
-            Close
+            {{ isTestingKey ? '⏳ Testing Key...' : '🔌 Test API Key' }}
           </button>
-          <button
-            @click="saveSettingsAndRescan"
-            class="px-4 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white"
-          >
-            Save &amp; Re-Scan
-          </button>
+
+          <div class="flex gap-2">
+            <button
+              @click="showSettingsModal = false"
+              class="px-4 py-2 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300"
+            >
+              Close
+            </button>
+            <button
+              @click="saveSettingsAndRescan"
+              class="px-4 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white"
+            >
+              Save &amp; Re-Scan
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -794,6 +839,8 @@ const copied = ref<boolean>(false)
 
 const showSettingsModal = ref<boolean>(false)
 const useCustomOverride = ref<boolean>(false)
+const isTestingKey = ref<boolean>(false)
+const keyTestResult = ref<{ valid: boolean; message: string } | null>(null)
 const llmSettings = ref({
   provider: 'openai',
   model: 'gpt-4o-mini',
@@ -801,12 +848,39 @@ const llmSettings = ref({
 })
 
 function onProviderChange() {
+  keyTestResult.value = null
   if (llmSettings.value.provider === 'openai') {
     llmSettings.value.model = 'gpt-4o-mini'
   } else if (llmSettings.value.provider === 'gemini') {
     llmSettings.value.model = 'gemini-2.5-pro'
   } else {
     llmSettings.value.model = 'claude-3-5-haiku-latest'
+  }
+}
+
+async function testApiKeyNow() {
+  isTestingKey.value = true
+  keyTestResult.value = null
+  try {
+    const res: any = await $fetch(`${apiBase}/api/test-key`, {
+      method: 'POST',
+      body: {
+        provider: llmSettings.value.provider,
+        model: llmSettings.value.model,
+        api_key: llmSettings.value.apiKey || undefined
+      }
+    })
+    keyTestResult.value = {
+      valid: Boolean(res?.valid),
+      message: res?.message || 'Unknown response'
+    }
+  } catch (err: any) {
+    keyTestResult.value = {
+      valid: false,
+      message: err?.message || 'Could not reach backend /api/test-key'
+    }
+  } finally {
+    isTestingKey.value = false
   }
 }
 
@@ -867,6 +941,9 @@ const liveVerdict = computed(() => {
 
 const isLiveLlm = computed(() => Boolean(analysisResult.value?.is_live_llm))
 const activeProviderLabel = computed(() => {
+  if (analysisResult.value?.llm_error) {
+    return `❌ ${(analysisResult.value.provider_used || 'LLM').toUpperCase()} API KEY ERROR`
+  }
   if (analysisResult.value?.is_live_llm) {
     return `${analysisResult.value.provider_used.toUpperCase()} (${analysisResult.value.model_used})`
   }

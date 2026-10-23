@@ -75,26 +75,26 @@ class LLMClient:
         gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
         anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
 
-        if env_provider == "openai" and openai_key:
+        if env_provider == "openai":
             return (
                 "openai",
                 openai_key,
                 cls._clean_model_for_provider("openai", model, default_models["openai"]),
             )
-        if env_provider == "gemini" and gemini_key:
+        if env_provider == "gemini":
             return (
                 "gemini",
                 gemini_key,
                 cls._clean_model_for_provider("gemini", model, default_models["gemini"]),
             )
-        if env_provider == "anthropic" and anthropic_key:
+        if env_provider == "anthropic":
             return (
                 "anthropic",
                 anthropic_key,
                 cls._clean_model_for_provider("anthropic", model, default_models["anthropic"]),
             )
 
-        # Auto-detect whichever key is configured in .env (prefer OpenAI if sk- is present)
+        # Auto-detect whichever key is configured in .env
         if openai_key:
             return (
                 "openai",
@@ -123,6 +123,8 @@ class LLMClient:
     async def _call_openai(
         self, api_key: str, model_name: str, system_prompt: str, user_prompt: str
     ) -> Dict[str, Any]:
+        if not api_key:
+            raise RuntimeError("OpenAI API key is empty. Set OPENAI_API_KEY in .env or in the UI modal.")
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 "https://api.openai.com/v1/chat/completions",
@@ -140,15 +142,26 @@ class LLMClient:
                     ],
                 },
             )
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                try:
+                    err_json = resp.json()
+                    err_msg = err_json.get("error", {}).get("message") or resp.text[:200]
+                except Exception:
+                    err_msg = resp.text[:200]
+                full_err = f"OpenAI API Error (HTTP {resp.status_code}): {err_msg}"
+                print(f"[LLM ERROR] {full_err}", flush=True)
+                raise RuntimeError(full_err)
+
             data = resp.json()
             raw_text = data["choices"][0]["message"]["content"]
             return self._parse_json(raw_text)
 
     async def complete_json(self, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
-        """Request a structured JSON response from the active LLM provider, with cross-provider failover."""
+        """Request a structured JSON response from the active LLM provider."""
         if not self.is_configured:
-            raise RuntimeError("No external LLM API key configured.")
+            raise RuntimeError(
+                f"No API key configured for provider '{self.provider.upper()}'. Please check .env or the API Config modal."
+            )
 
         if self.provider == "openai":
             return await self._call_openai(
@@ -156,20 +169,7 @@ class LLMClient:
             )
 
         if self.provider == "gemini":
-            try:
-                return await self._call_gemini(system_prompt, user_prompt)
-            except Exception as gemini_err:
-                # If OPENAI_API_KEY is also configured in .env, automatically fail over to OpenAI!
-                openai_key = os.getenv("OPENAI_API_KEY", "").strip()
-                if openai_key:
-                    openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
-                    res = await self._call_openai(
-                        openai_key, openai_model, system_prompt, user_prompt
-                    )
-                    self.provider = "openai"
-                    self.model = openai_model
-                    return res
-                raise gemini_err
+            return await self._call_gemini(system_prompt, user_prompt)
 
         if self.provider == "anthropic":
             async with httpx.AsyncClient(timeout=60.0) as client:
@@ -188,7 +188,10 @@ class LLMClient:
                         "messages": [{"role": "user", "content": user_prompt}],
                     },
                 )
-                resp.raise_for_status()
+                if resp.status_code != 200:
+                    full_err = f"Anthropic API Error (HTTP {resp.status_code}): {resp.text[:200]}"
+                    print(f"[LLM ERROR] {full_err}", flush=True)
+                    raise RuntimeError(full_err)
                 data = resp.json()
                 raw_text = data["content"][0]["text"]
                 return self._parse_json(raw_text)
@@ -215,6 +218,9 @@ class LLMClient:
         self, system_prompt: str, user_prompt: str
     ) -> Dict[str, Any]:
         """Calls Google Gemini using official google-generativeai SDK with REST fallback."""
+        if not self.api_key:
+            raise RuntimeError("Gemini API key is empty. Set GEMINI_API_KEY in .env or in the UI modal.")
+
         candidate_models: List[str] = []
         for m in [
             self.model,
@@ -243,7 +249,7 @@ class LLMClient:
                         self.model = model_name
                         return self._parse_json(raw_text)
                 except Exception as exc:
-                    last_error = f"{model_name}: {str(exc)[:180]}"
+                    last_error = f"{model_name}: {str(exc)[:200]}"
 
         payload_with_sys = {
             "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -288,11 +294,17 @@ class LLMClient:
                             self.model = model_name
                             return self._parse_json(raw_text)
                         else:
-                            last_error = f"HTTP {resp.status_code} ({model_name}): {resp.text[:160]}"
+                            try:
+                                err_msg = resp.json().get("error", {}).get("message") or resp.text[:160]
+                            except Exception:
+                                err_msg = resp.text[:160]
+                            last_error = f"HTTP {resp.status_code} ({model_name}): {err_msg}"
                     except Exception as exc:
                         last_error = str(exc)
 
-        raise RuntimeError(f"Gemini Pro API error ({last_error})")
+        full_err = f"Gemini API Error ({last_error})"
+        print(f"[LLM ERROR] {full_err}", flush=True)
+        raise RuntimeError(full_err)
 
     @staticmethod
     def _parse_json(raw: str) -> Dict[str, Any]:

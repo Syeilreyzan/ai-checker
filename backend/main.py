@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
@@ -51,6 +50,12 @@ class CorrectSentenceRequest(BaseModel):
     model: Optional[str] = None
 
 
+class TestKeyRequest(BaseModel):
+    provider: Optional[str] = None
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+
+
 @app.get("/api/health")
 async def health_check():
     client = LLMClient()
@@ -60,6 +65,41 @@ async def health_check():
         "configured_model": client.model,
         "has_env_api_key": client.is_configured,
     }
+
+
+@app.post("/api/test-key")
+async def test_api_key(payload: TestKeyRequest):
+    """Test whether the active or provided API key works with OpenAI / Gemini / Anthropic."""
+    client = LLMClient(
+        provider=payload.provider,
+        api_key=payload.api_key,
+        model=payload.model,
+    )
+    if not client.is_configured:
+        return {
+            "valid": False,
+            "provider": client.provider,
+            "model": client.model,
+            "message": f"No API key found for provider '{client.provider.upper()}'. Paste a key in .env or in the modal.",
+        }
+    try:
+        await client.complete_json(
+            system_prompt="Return a JSON object with status ok.",
+            user_prompt='Respond with {"status": "ok"}',
+        )
+        return {
+            "valid": True,
+            "provider": client.provider,
+            "model": client.model,
+            "message": f"Connected to {client.provider.upper()} ({client.model}) — API Key is valid!",
+        }
+    except Exception as exc:
+        return {
+            "valid": False,
+            "provider": client.provider,
+            "model": client.model,
+            "message": str(exc),
+        }
 
 
 @app.get("/api/samples")
