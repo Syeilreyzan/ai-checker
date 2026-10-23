@@ -24,15 +24,15 @@
         <div class="flex items-center gap-3">
           <div
             class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs"
-            :class="isLiveLlm ? 'bg-emerald-950/40 border-emerald-700/50 text-emerald-300' : 'bg-amber-950/40 border-amber-700/50 text-amber-300'"
+            :class="isLiveLlm ? 'bg-emerald-950/40 border-emerald-700/50 text-emerald-300' : 'bg-indigo-950/40 border-indigo-700/50 text-indigo-300'"
           >
             <span
               class="w-2 h-2 rounded-full animate-pulse"
-              :class="isLiveLlm ? 'bg-emerald-400' : 'bg-amber-400'"
+              :class="isLiveLlm ? 'bg-emerald-400' : 'bg-indigo-400'"
             ></span>
             <span>
               Engine:
-              <strong class="font-semibold uppercase">{{ activeProviderLabel }}</strong>
+              <strong class="font-semibold">{{ activeProviderLabel }}</strong>
             </span>
           </div>
 
@@ -40,7 +40,7 @@
             @click="showSettingsModal = true"
             class="px-3.5 py-2 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition flex items-center gap-1.5"
           >
-            <span>⚙️ LLM API Config</span>
+            <span>⚙️ Gemini Pro / API Config</span>
           </button>
         </div>
       </div>
@@ -55,7 +55,7 @@
             One-Click CEO Demo Scenarios
           </div>
           <p class="text-xs text-slate-400">
-            Load a sample document to test AI detection and interactive sentence-by-sentence humanization:
+            Load a sample document or click <strong>"Paste Custom Text"</strong> to test AI detection and sentence humanization:
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -84,8 +84,38 @@
               {{ sample.badge }}
             </span>
           </button>
+
+          <button
+            @click="startCustomText"
+            class="px-3.5 py-2 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5"
+            :class="
+              activeSampleId === 'custom'
+                ? 'bg-violet-600/25 border-violet-400 text-violet-200'
+                : 'bg-slate-800 hover:bg-slate-700 border-slate-600 text-white'
+            "
+          >
+            <span>➕ Paste Custom Text</span>
+          </button>
         </div>
       </section>
+
+      <!-- Optional API Warning Banner if API key returned an error -->
+      <div
+        v-if="analysisResult?.llm_error"
+        class="bg-amber-950/40 border border-amber-700/60 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-amber-200"
+      >
+        <div>
+          <strong class="font-semibold">Note:</strong> External Gemini API returned an authentication/model notice ({{ analysisResult.llm_error }}).
+          Results below are powered by the built-in <strong>Multi-Signal Forensic NLP Engine</strong>.
+          For Google AI Studio Gemini Pro, use a key starting with <code class="text-amber-100 font-mono">AIzaSy...</code> from <a href="https://aistudio.google.com/apikey" target="_blank" class="underline text-white">aistudio.google.com/apikey</a>.
+        </div>
+        <button
+          @click="showSettingsModal = true"
+          class="shrink-0 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-100 font-semibold"
+        >
+          Update Key
+        </button>
+      </div>
 
       <!-- Workspace Grid: Left Document Inspector / Editor + Right Analytics & Interactive Correction Queue -->
       <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -116,7 +146,7 @@
                       : 'text-slate-400 hover:text-slate-200'
                   "
                 >
-                  ✏️ Raw Text Editor
+                  ✏️ Edit / Paste Text
                 </button>
               </div>
 
@@ -139,16 +169,22 @@
             </div>
 
             <!-- Mode 1: Raw Text Editor -->
-            <div v-if="viewMode === 'editor' || !analysisResult" class="p-5">
+            <div v-if="viewMode === 'editor' || !analysisResult" class="p-5 space-y-3">
               <textarea
                 v-model="inputText"
                 rows="12"
-                placeholder="Paste or type any article, email, or report here to check for AI origin and humanize flagged sentences..."
-                class="w-full bg-slate-950/90 border border-slate-800 rounded-xl p-4 text-sm leading-relaxed text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition resize-y"
+                placeholder="Paste or type any article, email, or ChatGPT/Gemini paragraph here, then click '⚡ Scan for AI Origin'..."
+                class="w-full bg-slate-950/90 border border-slate-700 rounded-xl p-4 text-sm leading-relaxed text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition resize-y"
               ></textarea>
-              <div class="mt-3 flex items-center justify-between text-xs text-slate-400">
+              <div class="flex items-center justify-between text-xs text-slate-400">
                 <span>{{ wordCount }} words &bull; {{ characterCount }} characters</span>
-                <span>Click <strong class="text-indigo-400">Scan for AI Origin</strong> to highlight AI sentences</span>
+                <button
+                  @click="runAnalysis"
+                  :disabled="isAnalyzing || !inputText.trim()"
+                  class="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow disabled:opacity-40 transition"
+                >
+                  {{ isAnalyzing ? '⏳ Analyzing with AI Checker...' : '⚡ Run AI Check & Generate Corrections →' }}
+                </button>
               </div>
             </div>
 
@@ -170,7 +206,12 @@
                     Human / Corrected
                   </span>
                 </div>
-                <span class="text-slate-400 italic">Click any sentence below to inspect or humanize</span>
+                <button
+                  @click="viewMode = 'editor'"
+                  class="text-indigo-400 hover:text-indigo-300 font-medium underline"
+                >
+                  ✏️ Edit or paste different text
+                </button>
               </div>
 
               <!-- Interactive Sentences Paragraph -->
@@ -590,7 +631,7 @@
         </div>
 
         <p class="text-xs text-slate-400 leading-relaxed">
-          Configure an API key in your root <code class="text-indigo-300">.env</code> file or enter one below for this session.
+          Configured to use <strong>Google Gemini Pro (`gemini-2.5-pro`)</strong> by default. You can set your key in <code class="text-indigo-300">.env</code> or paste an <code class="text-indigo-300">AIzaSy...</code> key from <a href="https://aistudio.google.com/apikey" target="_blank" class="underline text-indigo-300">Google AI Studio</a> below.
         </p>
 
         <div class="space-y-3">
@@ -600,9 +641,21 @@
               v-model="llmSettings.provider"
               class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
             >
-              <option value="openai">OpenAI (gpt-4o-mini)</option>
-              <option value="gemini">Google Gemini (gemini-2.0-flash)</option>
-              <option value="anthropic">Anthropic Claude (claude-3-5-haiku-latest)</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic Claude</option>
+            </select>
+          </div>
+
+          <div v-if="llmSettings.provider === 'gemini'">
+            <label class="block text-xs font-medium text-slate-300 mb-1">Gemini Model</label>
+            <select
+              v-model="llmSettings.model"
+              class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+            >
+              <option value="gemini-2.5-pro">Gemini 2.5 Pro (Recommended — Deep Forensic)</option>
+              <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+              <option value="gemini-2.0-flash">Gemini 2.0 Flash (Fast)</option>
             </select>
           </div>
 
@@ -613,7 +666,7 @@
             <input
               v-model="llmSettings.apiKey"
               type="password"
-              placeholder="sk-... or AIza..."
+              placeholder="AIzaSy... or sk-..."
               class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
             />
           </div>
@@ -688,6 +741,7 @@ const copied = ref<boolean>(false)
 const showSettingsModal = ref<boolean>(false)
 const llmSettings = ref({
   provider: 'gemini',
+  model: 'gemini-2.5-pro',
   apiKey: ''
 })
 
@@ -734,9 +788,10 @@ const liveVerdict = computed(() => {
 
 const isLiveLlm = computed(() => Boolean(analysisResult.value?.is_live_llm))
 const activeProviderLabel = computed(() => {
-  const prov = analysisResult.value?.provider_used || 'ready'
-  if (prov === 'heuristic_fallback') return 'Built-in Forensic NLP (Add API Key for LLM)'
-  return `${prov} (${analysisResult.value?.model_used || ''})`
+  if (analysisResult.value?.is_live_llm) {
+    return `${analysisResult.value.provider_used.toUpperCase()} (${analysisResult.value.model_used})`
+  }
+  return `Forensic NLP + ${llmSettings.value.model}`
 })
 
 function getSentenceHighlightClass(sent: SentenceItem) {
@@ -805,6 +860,12 @@ function acceptAllTopSuggestions() {
   }
 }
 
+function startCustomText() {
+  activeSampleId.value = 'custom'
+  inputText.value = ''
+  viewMode.value = 'editor'
+}
+
 async function regenerateSentenceSuggestions(sent: SentenceItem) {
   regeneratingId.value = sent.id
   try {
@@ -814,7 +875,8 @@ async function regenerateSentenceSuggestions(sent: SentenceItem) {
         sentence: sent.original_text,
         context_text: inputText.value,
         tone: 'natural',
-        provider: llmSettings.value.apiKey ? llmSettings.value.provider : undefined,
+        provider: llmSettings.value.provider,
+        model: llmSettings.value.model,
         api_key: llmSettings.value.apiKey || undefined
       }
     })
@@ -836,7 +898,8 @@ async function runAnalysis() {
       method: 'POST',
       body: {
         text: inputText.value,
-        provider: llmSettings.value.apiKey ? llmSettings.value.provider : undefined,
+        provider: llmSettings.value.provider,
+        model: llmSettings.value.model,
         api_key: llmSettings.value.apiKey || undefined
       }
     })

@@ -1,3 +1,4 @@
+import json
 import math
 import re
 from typing import Any, Dict, List
@@ -29,20 +30,52 @@ AI_CLICHES = [
     "transformative journey",
     "not merely",
     "it is crucial",
+    "it is essential",
+    "it is important to note",
+    "it is worth noting",
     "in conclusion",
     "ultimately",
     "leverage",
     "leveraging",
+    "utilize",
+    "utilizing",
+    "plays a crucial role",
+    "plays a vital role",
+    "plays a pivotal role",
+    "underscores the importance",
+    "in today's fast-paced",
+    "in today's world",
+    "comprehensive overview",
+    "robust framework",
+    "key takeaway",
+    "significant impact",
+    "continuous innovation",
+    "operational efficiencies",
+]
+
+AI_STRUCTURAL_PATTERNS = [
+    (r"\b(in order to|by leveraging|by utilizing|by implementing|by adopting|by fostering)\b", "Formulaic participial or purpose clause typical of LLM generation"),
+    (r"\b(allows for|enables organizations|empowering teams|ensures that|serves as a|acts as a)\b", "Impersonal corporate verb construction common in AI prose"),
+    (r"\b(crucial|pivotal|paramount|indispensable|imperative|unprecedented|transformative|holistic|seamless|robust|comprehensive)\b", "High-frequency LLM intensifier adjective"),
+    (r"\b(not only .* but also|whether .* or .*|from .* to .*)\b", "Symmetrical rhetorical framing characteristic of AI models"),
 ]
 
 
 def split_sentences(text: str) -> List[str]:
-    """Split text into clean sentences while preserving punctuation."""
-    cleaned = re.sub(r"\s+", " ", text.strip())
-    if not cleaned:
+    """Split text into clean sentences across paragraphs and punctuation."""
+    if not text or not text.strip():
         return []
-    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'])", cleaned)
-    return [p.strip() for p in parts if p.strip()]
+    # Split on newlines first so multi-paragraph pastes segment cleanly
+    paragraphs = [p.strip() for p in re.split(r"\n+", text.strip()) if p.strip()]
+    sentences: List[str] = []
+    for para in paragraphs:
+        cleaned = re.sub(r"\s+", " ", para)
+        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'“‘(\[])", cleaned)
+        for p in parts:
+            s = p.strip()
+            if s:
+                sentences.append(s)
+    return sentences
 
 
 def compute_linguistic_metrics(sentences: List[str]) -> Dict[str, Any]:
@@ -65,10 +98,9 @@ def compute_linguistic_metrics(sentences: List[str]) -> Dict[str, Any]:
         variance = sum((x - mean_len) ** 2 for x in lengths) / len(lengths)
         std_dev = math.sqrt(variance)
         cv = std_dev / mean_len if mean_len > 0 else 0
-        # Humans have higher coefficient of variation (~0.45-0.85); AI is very uniform (~0.15-0.30)
         burstiness_score = min(100, int(round(cv * 140)))
     else:
-        burstiness_score = 45
+        burstiness_score = 40
 
     all_words = [w.lower() for s in sentences for w in re.findall(r"\b[a-zA-Z']+\b", s)]
     unique_words = set(all_words)
@@ -90,41 +122,85 @@ def compute_linguistic_metrics(sentences: List[str]) -> Dict[str, Any]:
     }
 
 
-def _heuristic_sentence_analysis(idx: int, sentence: str) -> Dict[str, Any]:
-    """Deterministic fallback scorer when no external LLM key is provided."""
+def _heuristic_sentence_analysis(
+    idx: int, sentence: str, doc_uniformity: int = 50
+) -> Dict[str, Any]:
+    """Multi-signal forensic linguistic scorer for sentence-level AI detection."""
     lower = sentence.lower()
-    words = re.findall(r"\b\w+\b", sentence)
+    words = re.findall(r"\b[a-zA-Z']+\b", sentence)
     word_count = len(words)
 
     matched_cliches = [c for c in AI_CLICHES if c in lower]
     reasons: List[str] = []
-    score = 22
+    score = 32
 
+    # 1. Direct AI cliché phrases
     if matched_cliches:
-        score += min(55, len(matched_cliches) * 26)
+        score += min(52, len(matched_cliches) * 24)
         reasons.append(
             f"Contains signature AI phraseology ({', '.join(repr(c) for c in matched_cliches[:3])})"
         )
 
-    if re.match(r"^(Furthermore|Moreover|Additionally|Consequently|Ultimately|In conclusion)\b", sentence):
-        score += 24
-        reasons.append("Starts with formal conjunctive adverb typical of LLM transitions")
+    # 2. Structural AI patterns & intensifiers
+    for pattern, reason_desc in AI_STRUCTURAL_PATTERNS:
+        if re.search(pattern, lower):
+            score += 14
+            if reason_desc not in reasons:
+                reasons.append(reason_desc)
 
-    if 16 <= word_count <= 28 and "," in sentence and not re.search(r"['—!?\d%]", sentence):
-        score += 18
-        reasons.append("Balanced, uniform clause cadence with zero colloquial markers or specifics")
+    # 3. Formal conjunctive adverb starters
+    if re.match(
+        r"^(Furthermore|Moreover|Additionally|Consequently|Ultimately|In conclusion|Overall|Notably|Importantly|Therefore|Thus)\b",
+        sentence,
+    ):
+        score += 22
+        reasons.append("Starts with formal conjunctive transition typical of LLM output")
 
-    # Human indicators reduce AI probability
-    if re.search(r"\b(honestly|weird|nasty|annoying|let's|we're|didn't|don't|folks|quick)\b", lower):
-        score -= 30
-    if re.search(r"\b(\d+%|\d+am|\d+pm|v\d+\.\d+|q[1-4])\b", lower):
-        score -= 22
+    # 4. High abstract nominalization density (-tion, -ment, -ity, -ance, -ence, -ive)
+    if word_count >= 8:
+        nominalizations = [
+            w
+            for w in words
+            if len(w) >= 7
+            and w.lower().endswith(("tion", "tions", "ment", "ments", "ity", "ities", "ance", "ence", "iveness"))
+        ]
+        nom_ratio = len(nominalizations) / word_count
+        if nom_ratio >= 0.14:
+            score += 18
+            reasons.append(
+                f"High density of abstract Latinate nouns ({', '.join(nominalizations[:3])})"
+            )
+        elif nom_ratio >= 0.08:
+            score += 10
 
-    score = max(5, min(98, score))
+    # 5. Average word length & lack of contractions in medium/long sentences
+    avg_word_len = (sum(len(w) for w in words) / word_count) if word_count else 0
+    has_contraction = bool(re.search(r"\b\w+'(t|re|ve|ll|m|d|s)\b", lower))
+    if word_count >= 14 and avg_word_len >= 5.2 and not has_contraction:
+        score += 15
+        reasons.append("Elevated lexical formality with zero natural contractions")
+
+    # 6. Balanced uniform clause length + document uniformity
+    if 15 <= word_count <= 32 and "," in sentence and not re.search(r"[!?;—()]", sentence):
+        score += 12
+        if doc_uniformity >= 65:
+            score += 8
+            reasons.append("Uniform sentence length and symmetrical clause cadence")
+
+    # 7. Human authenticity signals reduce AI score
+    if re.search(
+        r"\b(honestly|weird|nasty|annoying|let's|we're|didn't|don't|can't|won't|folks|quick|heads-up|btw|imo|yeah|pretty|super|stuff|guys)\b",
+        lower,
+    ):
+        score -= 28
+    if re.search(r"\b(\d+%|\d+am|\d+pm|v\d+\.\d+|q[1-4]|monday|tuesday|wednesday|thursday|friday)\b", lower):
+        score -= 20
+
+    score = max(6, min(98, score))
     if score >= 65:
         status = "ai"
         if not reasons:
-            reasons.append("Predictable token choices and synthetic corporate phrasing")
+            reasons.append("Predictable token probability and synthetic corporate phrasing")
     elif score >= 40:
         status = "mixed"
         if not reasons:
@@ -154,10 +230,11 @@ async def analyze_text_with_modules(
 ) -> Dict[str, Any]:
     """
     Main AI Detection + Sentence Suggestion pipeline.
-    Uses External LLM API when configured, with seamless fallback if no API key is present.
+    Uses Gemini Pro (or configured External LLM API) with forensic linguistic fallback.
     """
     sentences = split_sentences(text)
     metrics = compute_linguistic_metrics(sentences)
+    doc_uniformity = metrics.get("uniformity_score", 50)
 
     if not sentences:
         return {
@@ -180,10 +257,10 @@ async def analyze_text_with_modules(
             ]
             system_prompt = (
                 "You are an expert forensic linguist and AI text detector + humanizer editor. "
-                "Analyze the given list of sentences for AI-generated patterns (ChatGPT, Claude, Gemini) "
+                "Analyze the given JSON list of sentences for AI-generated patterns (ChatGPT, Gemini, Claude) "
                 "such as low burstiness, overused transitions ('Furthermore', 'Moreover', 'delve', 'tapestry', "
                 "'testament', 'strategic imperative'), robotic symmetry, and vague corporate abstractions.\n\n"
-                "Return a JSON object with this exact schema:\n"
+                "Return ONLY a valid JSON object with this exact schema:\n"
                 "{\n"
                 '  "overall_ai_probability": <int 0-100>,\n'
                 '  "verdict": "<Likely AI-Generated | Mixed AI & Human | Authentic Human Writing>",\n'
@@ -192,10 +269,9 @@ async def analyze_text_with_modules(
                 "    {\n"
                 '      "id": <int matching input id>,\n'
                 '      "ai_probability": <int 0-100>,\n'
-                '      "status": "<ai | mixed | human>",  // "ai" if >=65, "mixed" if 40-64, "human" if <40\n'
+                '      "status": "<ai | mixed | human>",\n'
                 '      "reasons": ["<specific reason 1>", "<specific reason 2>"],\n'
                 '      "suggestions": [\n'
-                "        // Provide 3 distinct human-sounding rewrites ONLY if status is 'ai' or 'mixed' (empty list if 'human'):\n"
                 '        {"label": "Natural & Direct", "tone": "natural", "text": "<authentic human rewrite>"},\n'
                 '        {"label": "Executive Crisp", "tone": "executive", "text": "<sharp, specific business rewrite>"},\n'
                 '        {"label": "Conversational", "tone": "casual", "text": "<warm, grounded human rewrite>"}\n'
@@ -204,7 +280,10 @@ async def analyze_text_with_modules(
                 "  ]\n"
                 "}"
             )
-            user_prompt = f"Analyze these sentences:\n{numbered_sentences}"
+            user_prompt = (
+                "Analyze these sentences and provide 3 human rewrite suggestions for any sentence with status 'ai' or 'mixed':\n"
+                + json.dumps(numbered_sentences, ensure_ascii=False)
+            )
             llm_result = await llm_client.complete_json(system_prompt, user_prompt)
 
             llm_sentences_by_id = {
@@ -231,13 +310,15 @@ async def analyze_text_with_modules(
                             "ai_probability": prob,
                             "status": status,
                             "reasons": item.get("reasons")
-                            or ["Evaluated by linguistic detection model"],
+                            or ["Evaluated by Gemini Pro forensic model"],
                             "suggestions": suggestions,
                             "accepted": False,
                         }
                     )
                 else:
-                    enriched_sentences.append(_heuristic_sentence_analysis(idx, sent_text))
+                    enriched_sentences.append(
+                        _heuristic_sentence_analysis(idx, sent_text, doc_uniformity)
+                    )
 
             overall_ai = int(
                 llm_result.get(
@@ -255,21 +336,23 @@ async def analyze_text_with_modules(
                 "verdict": llm_result.get("verdict")
                 or _verdict_from_score(overall_ai),
                 "summary": llm_result.get("summary")
-                or "Analyzed via External LLM Forensic Engine.",
+                or f"Analyzed via {llm_client.provider.upper()} ({llm_client.model}).",
                 "provider_used": llm_client.provider,
                 "model_used": llm_client.model,
                 "is_live_llm": True,
+                "llm_error": None,
                 "metrics": metrics,
                 "sentences": enriched_sentences,
             }
         except Exception as exc:
-            fallback_note = f"LLM API call failed ({str(exc)[:80]}); using built-in forensic analyzer."
+            llm_error_msg = str(exc)
     else:
-        fallback_note = "Running built-in linguistic analyzer (Add API key in .env or Settings for live LLM deep inspection)."
+        llm_error_msg = None
 
-    # Fallback deterministic analysis
+    # Multi-signal forensic linguistic analysis
     analyzed_sentences = [
-        _heuristic_sentence_analysis(i, s) for i, s in enumerate(sentences)
+        _heuristic_sentence_analysis(i, s, doc_uniformity)
+        for i, s in enumerate(sentences)
     ]
     overall_ai = int(
         round(
@@ -277,14 +360,19 @@ async def analyze_text_with_modules(
             / len(analyzed_sentences)
         )
     )
+    summary_text = (
+        f"Evaluated {len(sentences)} sentences across burstiness ({metrics['burstiness_score']}/100), "
+        f"clause uniformity ({metrics['uniformity_score']}%), and {metrics['cliche_count']} AI signature patterns."
+    )
     return {
         "overall_ai_probability": overall_ai,
         "overall_human_probability": 100 - overall_ai,
         "verdict": _verdict_from_score(overall_ai),
-        "summary": fallback_note,
+        "summary": summary_text,
         "provider_used": llm_client.provider,
         "model_used": llm_client.model,
         "is_live_llm": False,
+        "llm_error": llm_error_msg,
         "metrics": metrics,
         "sentences": analyzed_sentences,
     }
